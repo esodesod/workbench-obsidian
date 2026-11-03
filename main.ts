@@ -1,5 +1,4 @@
-import { Hash } from 'crypto';
-import { App, MarkdownPreviewView, Notice, Plugin, PluginSettingTab, Setting, ToggleComponent, FuzzySuggestModal, SuggestModal, TFile } from 'obsidian';
+import { App, Editor, FuzzySuggestModal, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile, TextFileView, View } from 'obsidian';
 
 export default class WorkbenchPlugin extends Plugin {
 	settings: WorkbenchSettings;
@@ -20,7 +19,10 @@ export default class WorkbenchPlugin extends Plugin {
 					|| e.basename === workbenchNoteTitle
 				)[0];
 
-			obsidianApp.workspace.openLinkText(workbenchNoteTitle, workbenchNoteFile.path, true, MarkdownPreviewView);
+			// Open the workbench note in a new leaf, in preview mode.
+			obsidianApp.workspace.openLinkText(workbenchNoteTitle, workbenchNoteFile?.path ?? "", true, {
+				state: { type: "markdown", state: { mode: "preview" } },
+			});
 		});
 
 		this.addCommand({
@@ -183,21 +185,24 @@ export default class WorkbenchPlugin extends Plugin {
 
 		this.addSettingTab(new WorkbenchSettingTab(this.app, this));
 
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
+			this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
+			let target = evt.target as HTMLElement;
 			if (this.settings.altClickType != "Nothing") {
 				if (evt.altKey) {
-					if ((evt.target.className === "internal-link") || (evt.target.className.includes("cm-hmd-internal-link"))) {
+					if ((target.className === "internal-link") || (target.className.includes("cm-hmd-internal-link"))) {
 						this.altClick(evt);
 					}
 				}
 			}
 			if (this.settings.metaAltClickType != "Nothing") {
 				if (evt.metaKey && evt.altKey) {
-					if ((evt.target.className.includes("cm-hmd-internal-link"))) {
+					if ((target.className.includes("cm-hmd-internal-link"))) {
 						new Notice("Sorry, this doesn't work when you click directly on a link. Try clicking outside of the link!");
-					} else if ((evt.target.className.includes("CodeMirror-line")) || evt.target.className.includes("cm")) {
-						let currentFile = this.app.workspace.activeLeaf.view.file;
-						this.metaAltClick(evt, currentFile);
+					} else if ((target.className.includes("CodeMirror-line")) || target.className.includes("cm")) {
+						let currentFile = (this.app.workspace.activeLeaf?.view as TextFileView)?.file;
+						if (currentFile) {
+							this.metaAltClick(evt, currentFile);
+						}
 					}
 				}
 			}
@@ -206,6 +211,13 @@ export default class WorkbenchPlugin extends Plugin {
 
 	onunload() {
 		console.log('Unloading the Workbench plugin.');
+	}
+
+	// The editor accessor changed between 0.15.x and modern Obsidian:
+	// old: view.sourceMode.cmEditor (CodeMirror), modern: view.editor (Editor).
+	getEditor(view: View): Editor {
+		const markdownView = view as MarkdownView;
+		return (markdownView as any).editor ?? (markdownView as any).sourceMode?.cmEditor;
 	}
 
 	insertWorkbench() {
@@ -217,14 +229,13 @@ export default class WorkbenchPlugin extends Plugin {
 				|| e.basename === workbenchNoteTitle
 			)[0];
 		
-		let currentNoteFile = obsidianApp.workspace.activeLeaf.view.file;
+		let currentNoteFile = (obsidianApp.workspace.activeLeaf.view as MarkdownView).file;
 
-		let editor = obsidianApp.workspace.activeLeaf.view.sourceMode.cmEditor;
+		let editor = this.getEditor(obsidianApp.workspace.activeLeaf.view);
 		let cursor = editor.getCursor();
-		let doc = editor.getDoc();
 
 		obsidianApp.vault.read(workbenchNoteFile).then(function (result) {
-			doc.replaceRange(result, cursor);
+			editor.replaceRange(result, cursor);
 			editor.focus();
 		});
 	}
@@ -232,7 +243,7 @@ export default class WorkbenchPlugin extends Plugin {
 	clearWorkbench() {
 		let obsidianApp = this.app;
 		let workbenchNoteTitle = this.settings.workbenchNoteName;
-		let editor = obsidianApp.workspace.activeLeaf.view.sourceMode.cmEditor;
+		let editor = this.getEditor(obsidianApp.workspace.activeLeaf.view);
 		let cursor = editor.getCursor();
 		let files = obsidianApp.vault.getFiles();
 			const workbenchNoteFile = files.filter(e => e.name === workbenchNoteTitle //hat-tip 🎩 to @MrJackPhil for this little workflow 
@@ -247,7 +258,7 @@ export default class WorkbenchPlugin extends Plugin {
 
 	saveToWorkbench(theMaterial: string, saveAction: string) {
 		let obsidianApp = this.app;
-		let editor = obsidianApp.workspace.activeLeaf.view.sourceMode.cmEditor;
+		let editor = this.getEditor(obsidianApp.workspace.activeLeaf.view);
 		let cursor = editor.getCursor();
 		let blankLine = this.settings.includeBlankLine;
 
@@ -292,7 +303,7 @@ export default class WorkbenchPlugin extends Plugin {
 			return result;
 	}
 
-	getBlock(inputLine: string, noteFile: object): string { //Returns the string of a block ID if block is found, or "" if not.
+	getBlock(inputLine: string, noteFile: TFile): string { //Returns the string of a block ID if block is found, or "" if not.
 		let obsidianApp = this.app;
 		let noteBlocks = obsidianApp.metadataCache.getFileCache(noteFile).blocks;
 		let blockString = "";
@@ -319,14 +330,14 @@ export default class WorkbenchPlugin extends Plugin {
 			linkPrefix = "!";
 		}
 
-		let newMaterial = linkPrefix + "[[" + someMouseEvent.target.innerText + "]]";
+		let newMaterial = linkPrefix + "[[" + (someMouseEvent.target as HTMLElement).innerText + "]]";
 		this.saveToWorkbench(newMaterial, "a link to the selected note");
 	}
 
-	metaAltClick(someMouseEvent: Event, activeFile: object) {
+	metaAltClick(someMouseEvent: Event, activeFile: TFile) {
 
 		let obsidianApp = this.app;
-		let editor = obsidianApp.workspace.activeLeaf.view.sourceMode.cmEditor;
+		let editor = this.getEditor(obsidianApp.workspace.activeLeaf.view);
 
 		let lineNumber = editor.getCursor().line;
 		let lineText = editor.getLine(lineNumber);
@@ -350,9 +361,10 @@ export default class WorkbenchPlugin extends Plugin {
 					linkPrefix = "!";
 				}
 
+				let lineBlockID = "";
 				if (this.getBlock(lineText, currentNoteFile) === "") { // The line is not already a block
 					lineText = lineText.trim();
-					let lineBlockID = this.createBlockHash(lineText).toString();
+					lineBlockID = this.createBlockHash(lineText).toString();
 					let lineWithBlock = lineText + " ^" + lineBlockID;
 					obsidianApp.vault.read(currentNoteFile).then(function (result) {
 						let previousNoteText = result;
@@ -360,7 +372,7 @@ export default class WorkbenchPlugin extends Plugin {
 						obsidianApp.vault.modify(currentNoteFile, newNoteText);
 					})
 				} else {
-					let lineBlockID = this.getBlock(lineText, currentNoteFile);
+					lineBlockID = this.getBlock(lineText, currentNoteFile);
 				}
 		
 				let newMaterial = linkPrefix + "[[" + noteLink + "#^" + lineBlockID + "]]";
@@ -373,12 +385,11 @@ export default class WorkbenchPlugin extends Plugin {
 
 	linkNoteInWorkbench() { // Saves a link to the current note to the workbench
 		let obsidianApp = this.app;
-		let currentView = obsidianApp.workspace.activeLeaf.view;
+		let currentView = obsidianApp.workspace.activeLeaf.view as MarkdownView;
 		// Get the file and create a link to it
-		let currentNoteFile = obsidianApp.workspace.activeLeaf.view.file;
+		let currentNoteFile = (obsidianApp.workspace.activeLeaf.view as MarkdownView).file;
 		let noteLink = obsidianApp.metadataCache.fileToLinktext(currentNoteFile, currentNoteFile.path, true);
-		let editor = currentView.sourceMode.cmEditor;
-		
+
 		let newMaterial = "[[" + noteLink + "]]";
 		this.saveToWorkbench(newMaterial, "a link to the current note");
 	}
@@ -386,7 +397,7 @@ export default class WorkbenchPlugin extends Plugin {
 	embedNoteInWorkbench() { // Saves an embed of the current note to the workbench
 		let obsidianApp = this.app;
 		// Get the file and create a link to it
-		let currentNoteFile = obsidianApp.workspace.activeLeaf.view.file;
+		let currentNoteFile = (obsidianApp.workspace.activeLeaf.view as MarkdownView).file;
 		let noteLink = obsidianApp.metadataCache.fileToLinktext(currentNoteFile, currentNoteFile.path, true);
 		
 		let newMaterial = "![[" + noteLink + "]]";
@@ -397,9 +408,9 @@ export default class WorkbenchPlugin extends Plugin {
 		let obsidianApp = this.app;
 
 		// get the heading
-		let currentView = obsidianApp.workspace.activeLeaf.view;
+		let currentView = obsidianApp.workspace.activeLeaf.view as MarkdownView;
 		let currentNoteFile = currentView.file;
-		let editor = currentView.sourceMode.cmEditor;
+		let editor = this.getEditor(currentView);
 		var cursor = editor.getCursor();
 
 		let currentLineNumber = cursor.line;
@@ -439,9 +450,9 @@ export default class WorkbenchPlugin extends Plugin {
 		let obsidianApp = this.app;
 
 		// get the heading
-		let currentView = obsidianApp.workspace.activeLeaf.view;
+		let currentView = obsidianApp.workspace.activeLeaf.view as MarkdownView;
 		let currentNoteFile = currentView.file;
-		let editor = currentView.sourceMode.cmEditor;
+		let editor = this.getEditor(currentView);
 		var cursor = editor.getCursor();
 	
 		let currentLineNumber = cursor.line;
@@ -483,9 +494,9 @@ export default class WorkbenchPlugin extends Plugin {
 		let obsidianApp = this.app;
 
 		// get the block
-		let currentView = obsidianApp.workspace.activeLeaf.view;
+		let currentView = obsidianApp.workspace.activeLeaf.view as MarkdownView;
 		let currentNoteFile = currentView.file;
-		let editor = currentView.sourceMode.cmEditor;
+		let editor = this.getEditor(currentView);
 		var cursor = editor.getCursor();
 		let lineText = editor.getLine(cursor.line);
 		let lineBlockID = this.getBlock(lineText, currentNoteFile);
@@ -510,9 +521,9 @@ export default class WorkbenchPlugin extends Plugin {
 		let obsidianApp = this.app;
 
 		// get the block
-		let currentView = obsidianApp.workspace.activeLeaf.view;
+		let currentView = obsidianApp.workspace.activeLeaf.view as MarkdownView;
 		let currentNoteFile = currentView.file;
-		let editor = currentView.sourceMode.cmEditor;
+		let editor = this.getEditor(currentView);
 		var cursor = editor.getCursor();
 		let lineText = editor.getLine(cursor.line);
 
@@ -537,8 +548,8 @@ export default class WorkbenchPlugin extends Plugin {
 	copyBlockIntoWorkbench() { // Copies the content of the current block to the workbench
 		let obsidianApp = this.app;
 
-		let currentView = obsidianApp.workspace.activeLeaf.view;
-		let editor = currentView.sourceMode.cmEditor;
+		let currentView = obsidianApp.workspace.activeLeaf.view as MarkdownView;
+		let editor = this.getEditor(currentView);
 		var cursor = editor.getCursor();
 		let lineText = editor.getLine(cursor.line);
 
@@ -549,9 +560,9 @@ export default class WorkbenchPlugin extends Plugin {
 	copyLineAndLinkToBlock() { // Copies the content of the current block to the workbench
 		let obsidianApp = this.app;
 
-		let currentView = obsidianApp.workspace.activeLeaf.view;
+		let currentView = obsidianApp.workspace.activeLeaf.view as MarkdownView;
 		let currentNoteFile = currentView.file;
-		let editor = currentView.sourceMode.cmEditor;
+		let editor = this.getEditor(currentView);
 		var cursor = editor.getCursor();
 		let lineText = editor.getLine(cursor.line);
 
@@ -584,17 +595,19 @@ export default class WorkbenchPlugin extends Plugin {
 	changeWorkbench() {
 		let obsidianApp = this.app;
 
-		new workbenchNameModal(obsidianApp).open();
+		new workbenchNameModal(obsidianApp, this).open();
 	}
 
 }
 
 class workbenchNameModal extends FuzzySuggestModal<string> { // thanks to Licat for the assist!
 	app: App;
+	workbenchPlugin: WorkbenchPlugin;
 
-    constructor(app: App) {
+    constructor(app: App, workbenchPlugin: WorkbenchPlugin) {
         super(app);
 		this.app = app;
+		this.workbenchPlugin = workbenchPlugin;
     }
 
     getItems(): string[] {
@@ -608,9 +621,8 @@ class workbenchNameModal extends FuzzySuggestModal<string> { // thanks to Licat 
     }
 
     onChooseItem(item: string, evt: MouseEvent | KeyboardEvent): void {
-		let workbenchPlugin = this.app.plugins.getPlugin("workbench-obsidian");
-		workbenchPlugin.settings.workbenchNoteName = item;
-		workbenchPlugin.saveData(workbenchPlugin.settings);
+		this.workbenchPlugin.settings.workbenchNoteName = item;
+		this.workbenchPlugin.saveData(this.workbenchPlugin.settings);
 		new Notice("Your workbench is now " + item);
     }
 }
